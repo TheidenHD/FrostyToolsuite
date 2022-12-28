@@ -6,6 +6,7 @@ using FrostySdk;
 using FrostySdk.Interfaces;
 using FrostySdk.IO;
 using FrostySdk.Managers;
+using Microsoft.Win32;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 using System;
@@ -14,6 +15,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Threading;
 
 namespace Frosty.ModSupport
@@ -2453,17 +2455,32 @@ namespace Frosty.ModSupport
 
         private bool RunSymbolicLinkProcess(List<SymLinkStruct> cmdArgs)
         {
-            using (TextWriter writer = new StreamWriter(new FileStream(AppDomain.CurrentDomain.BaseDirectory + "\\run.bat", FileMode.Create)))
+
+            RegistryKey myKey = Registry.LocalMachine.OpenSubKey("System\\CurrentControlSet\\Control\\Session Manager\\Environment", true);
+            if (myKey != null)
             {
+                string temp = ((string)myKey.GetValue("PATHEXT")).Trim();
+                if (!temp.Split(';').ToList().Contains("."))
+                {
+                    myKey.SetValue("PATHEXT", temp + ";.", RegistryValueKind.String);
+                    myKey.Close();
+                }
+            }
+            using (TextWriter writer = new StreamWriter(new FileStream(AppDomain.CurrentDomain.BaseDirectory + "/run.sh", FileMode.Create)))
+            {
+                writer.Write("#!/bin/bash\n");
+                writer.Write("cd \"" + ExecuteProcess("cmd.exe", "/C winepath \"" + fs.BasePath.Replace("\\", "/").TrimEnd('/') + "\"", true, false).Trim() + "\"\n");
                 foreach (SymLinkStruct arg in cmdArgs)
-                    writer.WriteLine("mklink" + ((arg.isFolder) ? "/D " : " ") + "\"" + arg.dest + "\" \"" + arg.src + "\"");
+                    writer.Write("ln -s " + ("\"../" + String.Join(String.Empty, arg.src.Replace(fs.BasePath, "").Replace("\\", "/").Split('/').Select(s => s = "../").ToArray())) + GetExactPathName(arg.src).Replace(fs.BasePath, "").Replace("\\", "/") + "\" \"./" + ((arg.isFolder) ? arg.dest.Replace(fs.BasePath, "") : arg.dest.ToLower().Replace(modDirName.ToLower(), modDirName).Replace(fs.BasePath.ToLower(), "")).Replace("\\", "/") + "\"\n");
             }
 
             // create data and update symbolic links
-            ExecuteProcess("cmd.exe", "/C \"" + AppDomain.CurrentDomain.BaseDirectory + "\\run.bat\"", true, true);
+            ExecuteProcess("cmd.exe", "/C /usr/bin/chmod u+x \"" + ExecuteProcess("cmd.exe", "/C winepath \"" + AppDomain.CurrentDomain.BaseDirectory.Replace("\\", "/").TrimEnd('/') + "\"", true, false).Trim() + "/run.sh\"", true, true);
+            ExecuteProcess("cmd.exe", "/C \"" +  AppDomain.CurrentDomain.BaseDirectory.Replace("\\", "/").TrimEnd('/').Trim() + "/run.sh\"", true, true);
 
+            System.Threading.Thread.Sleep(5000);
             // delete batch
-            File.Delete("run.bat");
+            File.Delete("run.sh");
 
             // validate
             foreach (SymLinkStruct arg in cmdArgs)
@@ -2475,7 +2492,27 @@ namespace Frosty.ModSupport
             return true;
         }
 
-        public static void ExecuteProcess(string processName, string args, bool waitForExit = false, bool asAdmin = false, Dictionary<string, string> env = null)
+        private static string GetExactPathName(string pathName)
+        {
+            //https://stackoverflow.com/a/326153/1882616
+            if (!(File.Exists(pathName) || Directory.Exists(pathName)))
+                return pathName;
+
+            var di = new DirectoryInfo(pathName);
+
+            if (di.Parent != null)
+            {
+                return Path.Combine(
+                    GetExactPathName(di.Parent.FullName),
+                    di.Parent.GetFileSystemInfos(di.Name)[0].Name);
+            }
+            else
+            {
+                return di.Name.ToUpper();
+            }
+        }
+
+        public static string ExecuteProcess(string processName, string args, bool waitForExit = false, bool asAdmin = false, Dictionary<string, string> env = null)
         {
             using (Process process = new Process())
             {
@@ -2485,6 +2522,7 @@ namespace Frosty.ModSupport
                 process.StartInfo.WorkingDirectory = fi.DirectoryName;
                 process.StartInfo.Arguments = args;
                 process.StartInfo.UseShellExecute = false;
+                process.StartInfo.RedirectStandardOutput = true;
 
                 if (env != null)
                 {
@@ -2494,16 +2532,15 @@ namespace Frosty.ModSupport
                     }
                 }
 
-                if (asAdmin)
-                {
-                    process.StartInfo.UseShellExecute = true;
-                    process.StartInfo.Verb = "runas";
-                }
-
                 process.Start();
 
+                string ret = "";
                 if (waitForExit)
+                {
+                    ret = process.StandardOutput.ReadToEnd();
                     process.WaitForExit();
+                }
+                return ret;   
             }
         }
 
