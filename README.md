@@ -1,4 +1,6 @@
 # FrostyToolsuite
+<ins>**IMPORTANT:**</ins> This Version is not compatible with Windows anymore. You should only use it with Wine.
+
 The most advanced modding platform for games running on DICE's Frostbite game engine.
 
 ## Setup
